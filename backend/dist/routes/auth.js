@@ -9,16 +9,14 @@ require("dotenv/config");
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const express_1 = require("express");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
-const pg_1 = require("pg");
+const db_1 = require("../utils/db");
+const generateEmployeeId_1 = require("../utils/generateEmployeeId");
 const router = (0, express_1.Router)();
-const pool = new pg_1.Pool({
-    connectionString: process.env.PSQL_URL,
-});
 async function initAuthSchema() {
     if (!process.env.PSQL_URL) {
         throw new Error("PSQL_URL is required in backend/.env");
     }
-    await pool.query(`
+    await db_1.pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id BIGSERIAL PRIMARY KEY,
       company_name VARCHAR(255) NOT NULL,
@@ -26,15 +24,12 @@ async function initAuthSchema() {
       email VARCHAR(320) NOT NULL UNIQUE,
       phone VARCHAR(32) NOT NULL,
       employee_id VARCHAR(32) UNIQUE,
-      role VARCHAR(16),
+      role VARCHAR(16) NOT NULL,
       password_hash TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS employee_id VARCHAR(32);`);
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(16);`);
-    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS users_employee_id_unique ON users (employee_id);`);
 }
 function getJwtSecret() {
     if (!process.env.JWT_SECRET) {
@@ -57,42 +52,6 @@ function validatePassword(password) {
     if (!/[^A-Za-z0-9]/.test(password))
         return "Password must include a special character";
     return null;
-}
-function getNameCode(name) {
-    const nameParts = name
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean);
-    if (nameParts.length < 2 || nameParts[0].length < 2 || nameParts[nameParts.length - 1].length < 2) {
-        throw new Error("Name must include first and last name with at least 2 letters each");
-    }
-    return `${nameParts[0].slice(0, 2)}${nameParts[nameParts.length - 1].slice(0, 2)}`.toUpperCase();
-}
-function getCompanyCode(companyName) {
-    const companyParts = companyName
-        .trim()
-        .split(/\s+/)
-        .filter(Boolean);
-    if (companyParts.length >= 2) {
-        return `${companyParts[0][0]}${companyParts[1][0]}`.toUpperCase();
-    }
-    if (companyParts[0]?.length >= 2) {
-        return companyParts[0].slice(0, 2).toUpperCase();
-    }
-    throw new Error("Company name must have at least 2 letters");
-}
-async function generateEmployeeId(companyName, name) {
-    const companyCode = getCompanyCode(companyName);
-    const nameCode = getNameCode(name);
-    const joiningYear = new Date().getFullYear().toString();
-    const result = await pool.query(`
-      SELECT MAX(RIGHT(employee_id, 4)) AS last_sequence
-      FROM users
-      WHERE employee_id ~ $1;
-    `, [`^[A-Z]{2}[A-Z]{4}${joiningYear}[0-9]{4}$`]);
-    const lastSequence = Number(result.rows[0]?.last_sequence ?? 0);
-    const nextSequence = String(lastSequence + 1).padStart(4, "0");
-    return `${companyCode}${nameCode}${joiningYear}${nextSequence}`;
 }
 function signToken(user) {
     return jsonwebtoken_1.default.sign({
@@ -119,33 +78,54 @@ function authenticateJwt(req, res, next) {
     }
 }
 router.post("/register", async (req, res) => {
-    const companyName = (req.body.companyName ?? req.body.company_name ?? "").trim();
+    const companyName = (req.body.company_name ?? "").trim();
     const name = (req.body.name ?? "").trim();
     const email = (req.body.email ?? "").trim().toLowerCase();
     const phone = (req.body.phone ?? "").trim();
     const role = (req.body.role ?? "").trim().toLowerCase();
     const password = req.body.password ?? "";
-    const confirmPassword = req.body.confirmPassword ?? req.body.confirm_password ?? "";
-    if (!companyName || !name || !email || !phone || !role || !password || !confirmPassword) {
-        return res.status(400).json({ message: "All registration fields are required" });
+    const confirmPassword = req.body.confirm_password ?? "";
+    console.log(companyName);
+    console.log(name);
+    console.log(email);
+    console.log(phone);
+    console.log(role);
+    console.log(password);
+    console.log(confirmPassword);
+    if (!companyName ||
+        !name ||
+        !email ||
+        !phone ||
+        !role ||
+        !password ||
+        !confirmPassword) {
+        return res
+            .status(400)
+            .json({ message: "All registration fields are required" });
     }
-    if (!["hr", "admin"].includes(role)) {
-        return res.status(403).json({ message: "Only HR or admin users can register" });
+    if (role != "hr") {
+        return res
+            .status(403)
+            .json({ message: "Only HR or admin users can register" });
     }
     if (!isValidEmail(email)) {
         return res.status(400).json({ message: "Valid email is required" });
     }
     if (password !== confirmPassword) {
-        return res.status(400).json({ message: "Password and confirm password must match" });
+        return res
+            .status(400)
+            .json({ message: "Password and confirm password must match" });
     }
     const passwordError = validatePassword(password);
     if (passwordError) {
         return res.status(400).json({ message: passwordError });
     }
     try {
-        const employeeId = await generateEmployeeId(companyName, name);
+        const employeeId = await (0, generateEmployeeId_1.generateEmployeeId)(db_1.pool, companyName, name);
+        console.log(employeeId);
+        console.log(role);
         const passwordHash = await bcryptjs_1.default.hash(password, 12);
-        const result = await pool.query(`
+        const result = await db_1.pool.query(`
         INSERT INTO users (company_name, name, email, phone, employee_id, role, password_hash)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id, company_name, name, email, phone, employee_id, role, created_at;
@@ -156,9 +136,12 @@ router.post("/register", async (req, res) => {
     }
     catch (error) {
         if (error.code === "23505") {
-            return res.status(409).json({ message: "Email or employee ID is already registered" });
+            return res
+                .status(409)
+                .json({ message: "Email or employee ID is already registered" });
         }
-        if (error instanceof Error && ["Company name", "Name"].some((prefix) => error.message.startsWith(prefix))) {
+        if (error instanceof Error &&
+            ["Company name", "Name"].some((prefix) => error.message.startsWith(prefix))) {
             return res.status(400).json({ message: error.message });
         }
         console.error("Registration failed", error);
@@ -169,10 +152,12 @@ router.post("/login", async (req, res) => {
     const email = (req.body.email ?? "").trim().toLowerCase();
     const password = req.body.password ?? "";
     if (!email || !password) {
-        return res.status(400).json({ message: "Email and password are required" });
+        return res
+            .status(400)
+            .json({ message: "Email and password are required" });
     }
     try {
-        const result = await pool.query("SELECT id, company_name, name, email, phone, employee_id, role, password_hash, created_at FROM users WHERE email = $1", [email]);
+        const result = await db_1.pool.query("SELECT id, company_name, name, email, phone, employee_id, role, password_hash, created_at FROM users WHERE email = $1", [email]);
         const user = result.rows[0];
         if (!user || !(await bcryptjs_1.default.compare(password, user.password_hash))) {
             return res.status(401).json({ message: "Invalid email or password" });
@@ -190,3 +175,7 @@ router.get("/me", authenticateJwt, (req, res) => {
     res.json({ user: req.user });
 });
 exports.default = router;
+/*
+curl -X GET http://localhost:5000/auth/me \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2IiwiZW1haWwiOiJqb2huLmRvYXNkZUBhZXhhbXBsZS5jb20iLCJjb21wYW55TmFtZSI6Ik9kb28gSW5kaWEiLCJuYW1lIjoiSm9obiBEb2UiLCJlbXBsb3llZUlkIjoiT0lKT0RPMjAyNjAwMDEiLCJyb2xlIjoiaHIiLCJpYXQiOjE3ODMxNDA3MTgsImV4cCI6MTc4Mzc0NTUxOH0.dT0d_z290qZlJj1KfyMTb9AcHfgpWxp0NZyveHfbjF4"
+*/

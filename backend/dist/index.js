@@ -38,6 +38,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
 const express_1 = __importDefault(require("express"));
+const createEmp_1 = __importDefault(require("./routes/admin/createEmp"));
 const auth_1 = __importStar(require("./routes/auth"));
 const app = (0, express_1.default)();
 const port = Number(process.env.PORT) || 5000;
@@ -46,6 +47,7 @@ app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
 });
 app.use("/auth", auth_1.default);
+app.use("/admin", createEmp_1.default);
 async function startServer() {
     await (0, auth_1.initAuthSchema)();
     app.listen(port, () => {
@@ -56,3 +58,7 @@ startServer().catch((error) => {
     console.error("Failed to start backend server", error);
     process.exit(1);
 });
+/*
+curl -X GET http://localhost:5000/admin/genereateEmployeeCredentials \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2IiwiZW1haWwiOiJqb2huLmRvYXNkZUBhZXhhbXBsZS5jb20iLCJjb21wYW55TmFtZSI6Ik9kb28gSW5kaWEiLCJuYW1lIjoiSm9obiBEb2UiLCJlbXBsb3llZUlkIjoiT0lKT0RPMjAyNjAwMDEiLCJyb2xlIjoiaHIiLCJpYXQiOjE3ODMxNDA5MDQsImV4cCI6MTc4Mzc0NTcwNH0.19w9yDJxTh757xFnTkmWL9D03CwQXiw_voso4PUQjAc"
+*/

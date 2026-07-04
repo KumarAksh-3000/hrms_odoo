@@ -1,0 +1,9 @@
+Authentication Block
+
+- JWT Authentication    DONE 
+- only hr can register  DONE
+- generate a empid      DONE
+
+
+- createEmployee() function for hr , to create an employe password and empid using email , name etc   DONE  
+- should send out an email to the employee containing the temp password , and loggin in should redirect to /change-password route  DONE
